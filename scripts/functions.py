@@ -3,14 +3,14 @@ import numpy as np
 import time
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+
 #%% Value function iteration
 class ValueFunctionMethods:
     '''
     A class implementing various value function iteration methods for dynamic programming
     '''
-
     
-    def __init__(self, beta, alpha, kgrid):
+    def __init__(self, beta, alpha, state_grid, choice_grid=None):
         '''
         Parameters
         ----------
@@ -28,9 +28,9 @@ class ValueFunctionMethods:
         '''
         self.beta = beta
         self.alpha = alpha
-        self.kgrid = kgrid
-        self.nk = len(kgrid)
-        
+        self.kgrid = state_grid
+        self.choice_grid = choice_grid if choice_grid is not None else state_grid
+        self.nk = len(state_grid)
         self.u_matrix = self._compute_utility_matrix()
         
     @staticmethod
@@ -55,7 +55,7 @@ class ValueFunctionMethods:
             Invariant log utility for asset grid.
 
         '''
-        c = self.kgrid[:, None]**self.alpha - self.kgrid[None, :]
+        c = self.kgrid[:, None]**self.alpha - self.choice_grid[None, :]
 
         # mask out negative consumption
         utility = np.full_like(c, -1e10, dtype=float)
@@ -133,7 +133,7 @@ class ValueFunctionMethods:
                 end = time.perf_counter()
                 time_s = end - start
                 # store policy function
-                a_opt = self.kgrid[policy_new]
+                a_opt = self.choice_grid[policy_new]
                 if verbose:
                     print(f"..Converged! in {time_s} seconds\n")
                     print(f"Number of iterations: {it}")
@@ -143,7 +143,7 @@ class ValueFunctionMethods:
         # If we reach here, maximum iterations were exceeded
         end = time.perf_counter()
         time_s = end - start
-        a_opt = self.kgrid[policy_new]
+        a_opt = self.choice_grid[policy_new]
         
         if verbose:
             print(f"Warning: Maximum iterations ({max_iter}) reached after {time_s:.4f} seconds")

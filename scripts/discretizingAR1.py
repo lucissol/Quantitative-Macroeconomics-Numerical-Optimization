@@ -9,6 +9,22 @@ with aggregate uncertainty
 # import packages
 import numpy as np
 from scipy.stats import norm
+from scipy.interpolate import interp1d
+import matplotlib.pyplot as plt
+import time
+from functools import wraps
+
+def time_method(func):
+    """Decorator to time class methods."""
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        start = time.perf_counter()
+        result = func(self, *args, **kwargs)
+        elapsed = time.perf_counter() - start
+        print(f" {func.__name__} took {elapsed:.3f} seconds")
+        return result
+    return wrapper
+
 
 class discretize_AR1:
     """
@@ -35,7 +51,8 @@ class discretize_AR1:
         self.rho = rho
         self.mu = mu
         self.sigma = sigma
-
+        
+    @time_method
     def Tauchen(self, N, m=3):
         """
         Discretize the AR(1) process using Tauchen's method.
@@ -85,7 +102,8 @@ class discretize_AR1:
         Q[:, -1] = 1 - norm.cdf((zgrid[-1] - dz/2 - mean.flatten()) / self.sigma)  # Last grid
          
         return zgrid, Q
-
+    
+    @time_method
     def Rouwenhorst(self, N):
         """
         Discretize the AR(1) process using Rouwenhorst's method.
@@ -184,12 +202,251 @@ class discretize_AR1:
          np.random.seed(seed)
          if initial_state_idx is None:
              initial_state_idx = np.random.randint(0, len(zgrid))
-         
          path = np.zeros(T, dtype=int)
          path[0] = zgrid[initial_state_idx]
          
          for t in range(1, T):
              # Transition to the next state based on the current state and transition probabilities
              path[t] = np.random.choice(len(zgrid), p=Q[path[t-1]])
-         
          return zgrid[path]
+     
+class agg_uncertainty:
+    def __init__(self, beta, alpha, delta, state, Q):
+        self.beta = beta
+        self.alpha = alpha
+        self.delta = delta
+        self.state = state
+        self.ns = len(state)
+        self.Q = Q
+
+    @time_method
+    def solve_EGM(self, kgrid, tol=1e-10, max_iter=1000):
+        nk = len(kgrid)
+        nz = self.ns
+        k_policy = np.tile(kgrid * 0.3, (nz, 1))  # Save 30% of capital
+        k_policy_new = np.zeros((nz, nk))
+        theta = self.state
+        
+        for i in range(max_iter):
+            x_next = (theta[:, None] * kgrid[None, :]**self.alpha + 
+                                (1 - self.delta) * kgrid[None, :])
+            c_next = x_next - k_policy
+            MPK_prime = (1 - self.delta + 
+                        theta[:, None] * self.alpha * kgrid[None, :]**(self.alpha-1))
+            
+            MU_prime = MPK_prime / c_next
+            expectation = self.Q @ MU_prime
+
+            # Today's consumption from Euler equation
+            c_today = 1 / (self.beta * expectation)  # shape: (nz, nk)
+            
+            # Today's resources needed
+            cash_at_hand = c_today + kgrid[None, :]  # cash at hand
+            # Update policy using interpolation
+            for z_i in range(nz):
+                # Interpolate: resources_today -> capital_today
+                policy_interp = interp1d(cash_at_hand[z_i, :], kgrid, kind='linear',
+                       bounds_error=False, 
+                       fill_value=(kgrid[0], kgrid[-1]))
+                
+                x_fixed = theta[z_i] * kgrid**self.alpha + (1 - self.delta) * kgrid
+                k_policy_new[z_i, :] = policy_interp(x_fixed)
+
+
+            # Check convergence
+            if np.linalg.norm(k_policy_new - k_policy)<(1+np.linalg.norm(k_policy))*tol:
+                print(f"Converged in {i} iterations")
+                return k_policy_new
+            
+            k_policy = k_policy_new.copy()
+        
+        print("Max iterations reached")
+        return k_policy
+    
+    
+    def simulate_economy(self, kgrid, T, burn_in, plot=False, seed = 44, initial_state_idx = None):
+        
+        policy = self.solve_EGM(kgrid)
+        np.random.seed(seed)
+        if initial_state_idx is None:
+            initial_state_idx = np.random.randint(0, self.ns)
+         
+        path = np.zeros(T, dtype=int)
+        k_path   = np.empty(T)
+        z_level  = np.empty(T)
+        cons     = np.empty(T)
+        output   = np.empty(T)
+        
+        path[0] = initial_state_idx
+        z_level[0] = self.state[initial_state_idx]
+        
+        cdf_Q = np.cumsum(self.Q, axis=1)  # Compute CDF for each row
+        k_path[0] = kgrid[0] # initial value for capital
+
+        for t in range(T):
+            # ressources
+            yt = z_level[t] * (k_path[t]**self.alpha)
+            x_t = yt + (1 - self.delta) * k_path[t]
+            # decision variable
+  
+            k_next = np.interp(k_path[t], kgrid, policy[path[t], :])
+            #k_next = np.minimum(k_next, x_t)  # enforce feasibility
+
+            cons[t] = x_t - k_next
+            output[t] = yt
+                        
+            if t < T-1: 
+                u = np.random.rand()  # Uniform random number between 0 and 1
+                path[t+1] = np.searchsorted(cdf_Q[path[t]], u) # shock
+                z_level[t+1] = self.state[path[t]]
+                k_path[t+1] = k_next
+                
+        if plot:
+            self._plot_economy(k_path, cons, output, z_level, burn_in)
+        return (
+            k_path[burn_in:], 
+            cons[burn_in:], 
+            output[burn_in:], 
+            path[burn_in:]
+            )
+
+    def _plot_economy(self, k_path, cons, output, z_level, burn_in):
+        """Plots simulated economy time series."""
+        T = len(k_path)
+        t = np.arange(T)
+    
+        fig, axs = plt.subplots(4, 1, figsize=(10, 8), sharex=True)
+        fig.suptitle("Simulated Economy Over Time", fontsize=14)
+    
+        axs[0].plot(t, z_level, color="gray")
+        axs[0].set_ylabel("Shock $z_t$")
+        
+        axs[1].plot(t, output, label="Output", color="tab:blue")
+        axs[1].set_ylabel("Output")
+        
+        axs[2].plot(t, cons, label="Consumption", color="tab:green")
+        axs[2].set_ylabel("Consumption")
+        
+        axs[3].plot(t, k_path, label="Capital", color="tab:red")
+        axs[3].set_ylabel("Capital $k_t$")
+        axs[3].set_xlabel("Time")
+    
+        # Mark burn-in period visually
+        for ax in axs:
+            ax.axvline(burn_in, color="black", linestyle="--", alpha=0.5)
+            ax.legend()
+    
+        plt.tight_layout(rect=[0, 0, 1, 0.96])
+        plt.show()
+
+        
+    def static_EEE(self, k_policy, kgrid, kfine):
+        '''
+        Parameters
+        ----------
+        policy_a : TYPE
+            Default: optimal next year capital.
+            If interpolating False: interpolated policy function that maps a to a_prime 
+        a_current : TYPE
+            Capital grid for today's state value.
+        beta : TYPE
+            Discount factor.
+        alpha : TYPE
+            Model parameter.
+        interpolating:
+            if False computes interpolated policy function with cubic splines.
+        
+        Returns
+        -------
+        Mean and Max Euler Equation Error.
+        '''
+        
+        euler_error = np.zeros((self.ns, len(kfine)))
+
+        for z_i, z in enumerate(self.state):
+            policy = interp1d(kgrid, k_policy[z_i, :], kind='cubic', fill_value='extrapolate')
+            k_next = policy(kfine)
+            # consumption today
+            cash = z * kfine**self.alpha + (1 - self.delta) * kfine
+            c = cash - k_next
+            
+            # compute implied consumption from Euler equation
+            
+            Emu = np.zeros_like(kfine)
+            
+            cash_next = self.state[:, None] * k_next**self.alpha + (1 - self.delta) * k_next
+            c_next = cash_next - policy(k_next)
+            MPK_prime = self.alpha * self.state[:, None] * k_next**(self.alpha-1) + 1 - self.delta
+            MU_prime = MPK_prime / c_next
+            Emu = self.Q[z_i, :] @ MU_prime
+            c_implied = 1 / (self.beta * Emu)
+            
+            # Euler error as relative deviation
+            euler_error[z_i, :] = np.abs((c - c_implied) / c_implied)
+        
+        return euler_error
+
+    @time_method
+    def _dynamic_EE(self, k_policy, kgrid, T, burn_in, seed=44, initial_state_idx=None):
+        """
+        Generate a time series implied by the Euler equation with log utility.
+    
+        Parameters
+        ----------
+        k_policy : ndarray
+            Policy function for capital, shape (nz, nk).
+        kgrid : ndarray
+            Grid for capital, shape (nk,).
+        T : int
+            Number of periods to simulate.
+        seed : int, optional
+            Random seed for reproducibility (default 44).
+        initial_state_idx : int, optional
+            Initial index of the exogenous state (default: random).
+    
+        Returns
+        -------
+        k_imp : ndarray
+            Implied capital path over time.
+        c_imp : ndarray
+            Implied consumption path over time (from Euler equation).
+        z_level : ndarray
+            Realizations of the exogenous state over time.
+        """
+        np.random.seed(seed)
+        
+        if initial_state_idx is None:
+            initial_state_idx = np.random.randint(0, self.ns)
+    
+        path = np.zeros(T, dtype=int)
+        k_imp   = np.empty(T)
+        z_level  = np.empty(T)
+        c_imp     = np.empty(T)
+
+        
+        path[0] = initial_state_idx
+        z_level[0] = self.state[initial_state_idx]
+        k_imp[0] = kgrid[10] # initial value for capital
+        cdf_Q = np.cumsum(self.Q, axis=1)  # Compute CDF for each row
+        
+        
+        for t in range(T):
+            # state shock determines policy
+            policy = interp1d(kgrid, k_policy[path[t], :], kind='cubic', fill_value='extrapolate')
+            k_next = policy(k_imp[t])
+            
+            # compute implied consumption from Euler equation
+            cash_next = self.state[:, None] * k_imp[t]**self.alpha + (1 - self.delta) * k_imp[t]
+            c_next = cash_next - policy(k_next)
+            MPK_prime = self.alpha * self.state[:, None] * k_imp[t]**(self.alpha-1) + 1 - self.delta
+            MU_prime = MPK_prime / c_next
+            Emu = self.Q[path[t], :] @ MU_prime
+            c_imp[t] = 1 / (self.beta * Emu)
+            
+            if t < T-1: 
+                u = np.random.rand()  # Uniform random number between 0 and 1
+                path[t+1] = np.searchsorted(cdf_Q[path[t]], u) # shock
+                z_level[t+1] = self.state[path[t+1]]
+                k_imp[t+1] = z_level[t] * k_imp[t] ** self.alpha + (1 - self.delta) * k_imp[t] - c_imp[t]
+                
+        return (k_imp[burn_in:], c_imp[burn_in:], z_level[burn_in:])
