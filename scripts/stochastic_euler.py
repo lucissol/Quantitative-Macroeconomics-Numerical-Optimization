@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import time
 from functools import wraps
 
+
 def time_method(func):
     """Decorator to time class methods."""
     @wraps(func)
@@ -193,11 +194,13 @@ class discretize_AR1:
              The transition probability matrix from Tauchen or Rouwenhorst.
          initial_state_idx : int, optional
              The starting index of the grid. Default is None, which selects a random starting index.
+         seed: int, optional
+             Random seed for reproducibility (default 44).
     
          Returns
          -------
          path : ndarray
-             Simulated time series of the AR(1) process.
+             Simulated time series of the discretized AR(1) process.
          """
          np.random.seed(seed)
          if initial_state_idx is None:
@@ -211,34 +214,72 @@ class discretize_AR1:
          return zgrid[path]
      
 class agg_uncertainty:
+    '''
+    Solving and simmulating a depreciation ramsey problem in an aggregate uncertainty environment.
+    '''
     def __init__(self, beta, alpha, delta, state, Q):
+        '''
+        Setting up economic model parameters.
+
+        Parameters
+        ----------
+        beta : int
+            Discount factor.
+        alpha : int
+            Capital elasticity.
+        delta : int
+            Depreciation rate.
+        state : array
+            State values of discretized AR1. Use class discretize_AR1 to discretize values.
+        Q : Transition Matrix
+            Transition matrix of the shock state space.
+
+        Returns
+        -------
+        None.
+
+        '''
         self.beta = beta
         self.alpha = alpha
         self.delta = delta
         self.state = state
-        self.ns = len(state)
+        self.nz = len(state)
         self.Q = Q
 
     @time_method
     def solve_EGM(self, kgrid, tol=1e-10, max_iter=1000):
+        '''.
+        Solving the aggregate uncertainty economy vie endogeneous grid method with a state space consisting of productivity and capital states.
+
+        Parameters
+        ----------
+        self: Model parameter
+        
+        kgrid : 1d array
+            Capital grid values.
+        tol : TYPE, optional
+            Policy convergence tolerance level . The default is 1e-10.
+        max_iter : int, optional
+            Maximum iterations for convergence on the policy. The default is 1000.
+
+        Returns
+        -------
+        TYPE
+            Implied policy function of form g(z,k) shape (nz, nk).
+
+        '''
         nk = len(kgrid)
-        nz = self.ns
+        nz = self.nz
         k_policy = np.tile(kgrid * 0.3, (nz, 1))  # Save 30% of capital
         k_policy_new = np.zeros((nz, nk))
         theta = self.state
         
         for i in range(max_iter):
-            x_next = (theta[:, None] * kgrid[None, :]**self.alpha + 
-                                (1 - self.delta) * kgrid[None, :])
-            c_next = x_next - k_policy
-            MPK_prime = (1 - self.delta + 
-                        theta[:, None] * self.alpha * kgrid[None, :]**(self.alpha-1))
-            
-            MU_prime = MPK_prime / c_next
-            expectation = self.Q @ MU_prime
+            # 
+            Emu = expected_marginal_utility(kgrid, theta, k_policy, self.Q, self.alpha, self.delta)
 
-            # Today's consumption from Euler equation
-            c_today = 1 / (self.beta * expectation)  # shape: (nz, nk)
+            # Today's consumption implied by Euler equation
+            c_today = 1 / (self.beta * Emu)  # shape: (nz, nk)
             
             # Today's resources needed
             cash_at_hand = c_today + kgrid[None, :]  # cash at hand
@@ -265,44 +306,61 @@ class agg_uncertainty:
     
     
     def simulate_economy(self, kgrid, T, burn_in, plot=False, seed = 44, initial_state_idx = None):
-        
+        '''
+        Simulate a time path of an aggregate uncertainty economy.
+
+        Parameters
+        ----------
+        kgrid : TYPE
+            DESCRIPTION.
+        T : TYPE
+            DESCRIPTION.
+        burn_in : TYPE
+            DESCRIPTION.
+        plot : TYPE, optional
+            DESCRIPTION. The default is False.
+        seed : TYPE, optional
+            Random seed for reproducibility (default 44).
+        initial_state_idx : TYPE, optional
+            DESCRIPTION. The default is None.
+
+        Returns
+        -------
+        k_path: array
+            Forward simulated cpaital path.
+        c_path: array
+            Forward simulated consumption path.
+        y_path: array
+            Forward simulated output path.
+        path: array
+            Markov shock state indices path.
+
+        '''
+        # get the policy of the model
         policy = self.solve_EGM(kgrid)
-        np.random.seed(seed)
-        if initial_state_idx is None:
-            initial_state_idx = np.random.randint(0, self.ns)
-         
-        path = np.zeros(T, dtype=int)
+        
+        path = generate_shock_path(self.Q, T=T, seed=seed, initial_state_idx=initial_state_idx)
         k_path   = np.empty(T)
-        z_level  = np.empty(T)
         cons     = np.empty(T)
         output   = np.empty(T)
-        
-        path[0] = initial_state_idx
-        z_level[0] = self.state[initial_state_idx]
-        
-        cdf_Q = np.cumsum(self.Q, axis=1)  # Compute CDF for each row
         k_path[0] = kgrid[0] # initial value for capital
-
+        
         for t in range(T):
+            z  = self.state[path[t]]
             # ressources
-            yt = z_level[t] * (k_path[t]**self.alpha)
+            yt = z * (k_path[t]**self.alpha)
             x_t = yt + (1 - self.delta) * k_path[t]
             # decision variable
-  
             k_next = np.interp(k_path[t], kgrid, policy[path[t], :])
-            #k_next = np.minimum(k_next, x_t)  # enforce feasibility
-
-            cons[t] = x_t - k_next
+            cons[t] = x_t - k_next # consumption implied by the budget constraint
             output[t] = yt
                         
-            if t < T-1: 
-                u = np.random.rand()  # Uniform random number between 0 and 1
-                path[t+1] = np.searchsorted(cdf_Q[path[t]], u) # shock
-                z_level[t+1] = self.state[path[t]]
+            if t < T-1:
+                # next state variabels
                 k_path[t+1] = k_next
                 
         if plot:
-            self._plot_economy(k_path, cons, output, z_level, burn_in)
+            self._plot_economy(k_path, cons, output, path, burn_in)
         return (
             k_path[burn_in:], 
             cons[burn_in:], 
@@ -310,7 +368,7 @@ class agg_uncertainty:
             path[burn_in:]
             )
 
-    def _plot_economy(self, k_path, cons, output, z_level, burn_in):
+    def _plot_economy(self, k_path, cons, output, path, burn_in):
         """Plots simulated economy time series."""
         T = len(k_path)
         t = np.arange(T)
@@ -318,8 +376,8 @@ class agg_uncertainty:
         fig, axs = plt.subplots(4, 1, figsize=(10, 8), sharex=True)
         fig.suptitle("Simulated Economy Over Time", fontsize=14)
     
-        axs[0].plot(t, z_level, color="gray")
-        axs[0].set_ylabel("Shock $z_t$")
+        axs[0].plot(t, self.state[path[t]], color="gray")
+        axs[0].set_ylabel("Shock State $z_t$")
         
         axs[1].plot(t, output, label="Output", color="tab:blue")
         axs[1].set_ylabel("Output")
@@ -340,45 +398,41 @@ class agg_uncertainty:
         plt.show()
 
         
-    def static_EEE(self, k_policy, kgrid, kfine):
+    def static_EEE(self, k_policy, kgrid, kfine): #WiP to vectorize and use of expected_marginal_utility
         '''
+        Compute the Euler Equation Error of a policy function of shape (nz, nk) for each grid point
+        
         Parameters
         ----------
-        policy_a : TYPE
+        policy_a : flexible
             Default: optimal next year capital.
             If interpolating False: interpolated policy function that maps a to a_prime 
-        a_current : TYPE
+        kgrid : array
             Capital grid for today's state value.
-        beta : TYPE
-            Discount factor.
-        alpha : TYPE
-            Model parameter.
+        kfine : array
+            Finer capital grid to evaluate performance of policy at interpolated points. 
         interpolating:
             if False computes interpolated policy function with cubic splines.
         
         Returns
         -------
-        Mean and Max Euler Equation Error.
+        Euler Equation Error for each state of shape (nz, nk).
         '''
         
-        euler_error = np.zeros((self.ns, len(kfine)))
+        euler_error = np.zeros((self.nz, len(kfine)))
 
         for z_i, z in enumerate(self.state):
             policy = interp1d(kgrid, k_policy[z_i, :], kind='cubic', fill_value='extrapolate')
             k_next = policy(kfine)
-            # consumption today
+            # consumption today given budget constraint implied by policy
             cash = z * kfine**self.alpha + (1 - self.delta) * kfine
             c = cash - k_next
-            
             # compute implied consumption from Euler equation
-            
-            Emu = np.zeros_like(kfine)
-            
             cash_next = self.state[:, None] * k_next**self.alpha + (1 - self.delta) * k_next
             c_next = cash_next - policy(k_next)
             MPK_prime = self.alpha * self.state[:, None] * k_next**(self.alpha-1) + 1 - self.delta
             MU_prime = MPK_prime / c_next
-            Emu = self.Q[z_i, :] @ MU_prime
+            Emu = self.Q[z_i, :] @ MU_prime # expected marginal utility
             c_implied = 1 / (self.beta * Emu)
             
             # Euler error as relative deviation
@@ -388,6 +442,60 @@ class agg_uncertainty:
 
     @time_method
     def _dynamic_EE(self, k_policy, kgrid, T, burn_in, seed=44, initial_state_idx=None):
+        """
+        Generate a time series implied by the Euler equation with log utility given a policy.
+    
+        Parameters
+        ----------
+        k_policy : ndarray
+            Policy function for capital, shape (nz, nk).
+        kgrid : ndarray
+            Grid for capital, shape (nk,).
+        T : int
+            Number of periods to simulate.
+        Burnin : int
+            Number of periods to burn in.
+        seed : int, optional
+            Random seed for reproducibility (default 44).
+        initial_state_idx : int, optional
+            Initial index of the exogenous state (default: random).
+    
+        Returns
+        -------
+        k_imp : ndarray
+            Implied capital path over time.
+        c_imp : ndarray
+            Implied consumption path over time.
+        z_level : ndarray
+            Realizations of the exogenous state over time.
+        """
+    
+        path = generate_shock_path(self.Q, T, seed, initial_state_idx)
+        k_imp   = np.empty(T)
+        c_imp     = np.empty(T)
+        k_imp[0] = kgrid[0] # initial value for capital
+        
+        
+        for t in range(T):
+            # state shock level
+            z = self.state[path[t]]
+            # state shock determines policy
+            policy = interp1d(kgrid, k_policy[path[t], :], kind='cubic', fill_value='extrapolate')
+            k_current = np.array([k_imp[t]])
+            k_next = policy(k_current)
+
+            # compute implied consumption from Euler equation
+            Emu = expected_marginal_utility(k_current, self.state, k_next, self.Q[path[t]], self.alpha, self.delta)
+            c_imp[t] = 1 / (self.beta * Emu)
+            
+            if t < T-1: 
+                k_imp[t+1] = z * k_imp[t] ** self.alpha + (1 - self.delta) * k_imp[t] - c_imp[t]
+                
+        return (k_imp[burn_in:], c_imp[burn_in:], path[burn_in:])
+    
+    
+    @time_method
+    def _dynamic_EE_old(self, k_policy, kgrid, T, burn_in, seed=44, initial_state_idx=None): #WiP
         """
         Generate a time series implied by the Euler equation with log utility.
     
@@ -416,7 +524,7 @@ class agg_uncertainty:
         np.random.seed(seed)
         
         if initial_state_idx is None:
-            initial_state_idx = np.random.randint(0, self.ns)
+            initial_state_idx = np.random.randint(0, self.nz)
     
         path = np.zeros(T, dtype=int)
         k_imp   = np.empty(T)
@@ -449,4 +557,78 @@ class agg_uncertainty:
                 z_level[t+1] = self.state[path[t+1]]
                 k_imp[t+1] = z_level[t] * k_imp[t] ** self.alpha + (1 - self.delta) * k_imp[t] - c_imp[t]
                 
-        return (k_imp[burn_in:], c_imp[burn_in:], z_level[burn_in:])
+        return (k_imp[burn_in:], c_imp[burn_in:], path[burn_in:])
+    
+def generate_shock_path(Q, T, seed=44, initial_state_idx=None):
+    '''
+    Generate a time series of shock indices.
+
+    Parameters
+    ----------
+    Q : TYPE
+        Transition Matrix. Rows must sum up to 1
+    T : TYPE
+        Time points.
+    seed : TYPE, optional
+        Random seed for reproducibility (default 44).
+    initial_state_idx : TYPE, optional
+       Initial index of the exogenous state (default: random).
+       
+    Returns
+    -------
+    path : Array of integers
+        Time path of a discretized AR1.
+
+    '''
+    np.random.seed(seed)
+    nz = Q.shape[0]
+    if initial_state_idx is None:
+        initial_state_idx = np.random.randint(0, nz)
+    path = np.zeros(T, dtype=int)
+    path[0] = initial_state_idx
+
+    cdf_Q = np.cumsum(Q, axis=1)
+    for t in range(T - 1):
+        u = np.random.rand()
+        path[t + 1] = np.searchsorted(cdf_Q[path[t]], u)
+    return path
+
+def expected_marginal_utility(kgrid, theta, k_policy, Q, alpha, delta):
+    """
+    Compute expected marginal utility for each state and capital for log utility. Underlying strucutre assumes a discretized marcov chain.
+
+    Parameters
+    ----------
+    kgrid : (nk,) array
+        Capital grid.
+    theta : (nz,) array
+        Productivity states.
+    k_policy : (nz, nk) array
+        Next-period capital policy.
+    Q : (nz, nz) array
+        Transition matrix.
+    alpha : float
+        Capital share in production.
+    delta : float
+        Depreciation rate.
+
+    Returns
+    -------
+    Emu : (nz, nk) array
+        Expected marginal utility.
+    """
+    # Next-period consumption
+    c_next = theta[:, None] * kgrid[None, :]**alpha + (1 - delta) * kgrid[None, :] - k_policy
+
+    # Marginal product of capital next period
+    MPK_prime = (1 - delta) + theta[:, None] * alpha * kgrid[None, :]**(alpha - 1)
+
+    # Marginal utility next period
+    MU_prime = MPK_prime / c_next
+
+    # Expected marginal utility
+    Emu = Q @ MU_prime
+    return Emu
+
+    
+    

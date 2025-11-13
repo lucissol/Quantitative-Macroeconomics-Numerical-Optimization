@@ -3,8 +3,6 @@
 Created on Mon Nov  3 09:48:50 2025
 
 @author: lseibert
-        João Cordeiro 
-        Louis Brune
 """
 from scripts.stochastic_euler import discretize_AR1
 import numpy as np
@@ -308,7 +306,6 @@ plt.xlabel("time")
 plt.legend()
 plt.title('capital, consumption, output evolution last 2000 periods')
 plt.show()
-# very well illustrated is that the volatility of capital is the largest, and the of capital the smallest in both economies!
 #%% stationary distribution large shock economy
 sns.histplot(k_sim2, kde=True, color='skyblue', bins=40)
 
@@ -365,8 +362,8 @@ plt.show()
 kfine = np.linspace(k_min, k_max, nk+1000)
 
 #%% Dynamic Euler Equation Error
-imp_econ = model1._dynamic_EE_old(policy_egm1, kgrid, T, burnin, seed=44)
-real_econ = model1.simulate_economy(kgrid, T, burnin, plot=False, seed=44)
+imp_econ = model1._dynamic_EE_old(policy_egm1, kgrid, T, burnin)
+real_econ = model1.simulate_economy(kgrid, T, burnin, plot=False)
 static_EEE = model1.static_EEE(policy_egm1, kgrid, kgrid)
 dynamic_EEE = np.abs((real_econ[1] - imp_econ[1]) / imp_econ[1]) # computing the error given the simulated consumption paths
 #%%
@@ -376,3 +373,4 @@ print(f"Dynamic errors computed on the same shock path: {np.array_equal(real_eco
 print(f" Dynamic EEE: {np.mean(dynamic_EEE)}")
 print(f" Static EEE: {np.mean(static_EEE)}")
 # Dynamic Euler Equation Errors accumulate over time and thus we observe a higher mean error than in the static case!
+### troubleshooting
