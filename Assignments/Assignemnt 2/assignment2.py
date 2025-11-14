@@ -72,10 +72,10 @@ plt.show()
 
 #%% Estimation check
 
-model_tc = AutoReg(time_seriesR, lags=1).fit()
+model_tc = AutoReg(time_seriesT, lags=1).fit()
 print(model_tc.summary())
 
-model_rw = AutoReg(time_seriesT, lags=1).fit()
+model_rw = AutoReg(time_seriesR, lags=1).fit()
 print(model_rw.summary())
        
 models = [model_tc, model_rw]
@@ -298,7 +298,7 @@ print(f"Deterministic steady-state k*: {k_ss_deterministic1:.4f}")
 # The mean capital stock holding is almost identical to the deterministic economy with same unconditional producitivity.
 # The small discrepance is due the certainty equivalence, that the representative agent stills prefers to have fully determined consumption path!
 #%% economy with large risk 0.2
-k_sim2, c_sim2, y_sim2, path_sim2 = model2.simulate_economy(kgrid_large, T, burnin, plot=False, initial_state_idx=4)
+k_sim2, c_sim2, y_sim2, path_sim2 = model2.simulate_economy(kgrid_large, T, burnin, plot=True, initial_state_idx=4)
 
 # plot for the last 2000 simlations:
 plt.plot(time_grid, k_sim2[broadcast_range_var:],label="capital",linewidth=1)
@@ -376,3 +376,8 @@ print(f"Dynamic errors computed on the same shock path: {np.array_equal(real_eco
 print(f" Dynamic EEE: {np.mean(dynamic_EEE)}")
 print(f" Static EEE: {np.mean(static_EEE)}")
 # Dynamic Euler Equation Errors accumulate over time and thus we observe a higher mean error than in the static case!
+#%%
+
+test = model1._dynamic_EE_old(policy_egm1, kgrid, T, burnin, seed=44)[1]
+test1 = model1._dynamic_EE(policy_egm1, kgrid, T, burnin, seed=44)[1]
+np.mean(test1-test)

@@ -544,7 +544,7 @@ class agg_uncertainty:
             k_next = policy(k_imp[t])
             
             # compute implied consumption from Euler equation
-            cash_next = self.state[:, None] * k_imp[t]**self.alpha + (1 - self.delta) * k_imp[t]
+            cash_next = self.state[:, None] * k_next**self.alpha + (1 - self.delta) * k_next
             c_next = cash_next - policy(k_next)
             MPK_prime = self.alpha * self.state[:, None] * k_imp[t]**(self.alpha-1) + 1 - self.delta
             MU_prime = MPK_prime / c_next
