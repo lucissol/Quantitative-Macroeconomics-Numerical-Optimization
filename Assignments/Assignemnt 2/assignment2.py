@@ -94,6 +94,8 @@ print(comparison_table)
 # Answer: 
 # Tauchen's method is to sticky and overreflects the persistance. Rouwenhorst correctly produces an AR1 with 3 digit precision!
 #%% ### Exercise 2: A simple stochastic Ramsey model ###
+from scripts.functions import ValueFunctionMethods
+
 beta = 0.984
 alpha = 0.323
 delta = 0.025
@@ -124,7 +126,6 @@ eps_grid2 = np.exp(eps_grid_log2)
 print(eps_grid1)
 print(eps_grid2)
 #%% b)
-from scripts.functions import ValueFunctionMethods
 
 state_of_the_worlds = []
 for i, theta in enumerate(eps_grid1):
@@ -257,8 +258,7 @@ for i, state in enumerate(state_of_the_worlds_large_shock):
 # Vice versa, in "bad states" the optimal policy demands to save less than optimally in the deterministic case
 #%% d) 
 T = 5100
-burnin = 100
-view = 200
+burnin = 1000
 #%% full certainty
 determ = discretize_AR1(rho, 0, 0)
 deter, deterQ = determ.Rouwenhorst(7)
@@ -365,9 +365,9 @@ plt.show()
 kfine = np.linspace(k_min, k_max, nk+1000)
 
 #%% Dynamic Euler Equation Error
-imp_econ = model1._dynamic_EE_old(policy_egm1, kgrid, T, burnin, seed=44)
+imp_econ = model1._dynamic_EE(policy_egm1, kgrid, T, burnin, seed=44)
 real_econ = model1.simulate_economy(kgrid, T, burnin, plot=False, seed=44)
-static_EEE = model1.static_EEE(policy_egm1, kgrid, kgrid)
+static_EEE = model1._static_EEE(policy_egm1, kgrid, kfine)
 dynamic_EEE = np.abs((real_econ[1] - imp_econ[1]) / imp_econ[1]) # computing the error given the simulated consumption paths
 #%%
 print("Baseline Economy EEE")
@@ -377,7 +377,11 @@ print(f" Dynamic EEE: {np.mean(dynamic_EEE)}")
 print(f" Static EEE: {np.mean(static_EEE)}")
 # Dynamic Euler Equation Errors accumulate over time and thus we observe a higher mean error than in the static case!
 #%%
+plt.plot(kgrid, np.mean(static_EEE, axis=0))
+#%%
 
 test = model1._dynamic_EE_old(policy_egm1, kgrid, T, burnin, seed=44)[1]
 test1 = model1._dynamic_EE(policy_egm1, kgrid, T, burnin, seed=44)[1]
-np.mean(test1-test)
+
+#%%
+np.mean(np.sqrt((test1-test)**2))

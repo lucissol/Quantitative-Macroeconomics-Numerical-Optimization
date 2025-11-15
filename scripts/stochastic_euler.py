@@ -277,7 +277,6 @@ class agg_uncertainty:
         for i in range(max_iter):
             # 
             Emu = expected_marginal_utility(kgrid, theta, k_policy, self.Q, self.alpha, self.delta)
-
             # Today's consumption implied by Euler equation
             c_today = 1 / (self.beta * Emu)  # shape: (nz, nk)
             
@@ -288,11 +287,9 @@ class agg_uncertainty:
                 # Interpolate: resources_today -> capital_today
                 policy_interp = interp1d(cash_at_hand[z_i, :], kgrid, kind='linear',
                        bounds_error=False, 
-                       fill_value=(kgrid[0], kgrid[-1]))
-                
+                       fill_value=(kgrid[0], kgrid[-1]))   
                 x_fixed = theta[z_i] * kgrid**self.alpha + (1 - self.delta) * kgrid
                 k_policy_new[z_i, :] = policy_interp(x_fixed)
-
 
             # Check convergence
             if np.linalg.norm(k_policy_new - k_policy)<(1+np.linalg.norm(k_policy))*tol:
@@ -311,8 +308,8 @@ class agg_uncertainty:
 
         Parameters
         ----------
-        kgrid : TYPE
-            DESCRIPTION.
+        kgrid : 1d array
+            capital grid.
         T : TYPE
             DESCRIPTION.
         burn_in : TYPE
@@ -337,8 +334,9 @@ class agg_uncertainty:
 
         '''
         # get the policy of the model
-        policy = self.solve_EGM(kgrid)
-        
+        policy = self.solve_EGM(kgrid) #returns cash at hand -> capital mapping
+        xgrid = self.state[:, None] * kgrid[None, :]**(self.alpha) + (1 - self.delta)*kgrid[None,:]
+
         path = generate_shock_path(self.Q, T=T, seed=seed, initial_state_idx=initial_state_idx)
         k_path   = np.empty(T)
         cons     = np.empty(T)
@@ -351,7 +349,7 @@ class agg_uncertainty:
             yt = z * (k_path[t]**self.alpha)
             x_t = yt + (1 - self.delta) * k_path[t]
             # decision variable
-            k_next = np.interp(k_path[t], kgrid, policy[path[t], :])
+            k_next = np.interp(x_t, xgrid[path[t], :], policy[path[t], :])
             cons[t] = x_t - k_next # consumption implied by the budget constraint
             output[t] = yt
                         
@@ -397,8 +395,8 @@ class agg_uncertainty:
         plt.tight_layout(rect=[0, 0, 1, 0.96])
         plt.show()
 
-        
-    def static_EEE(self, k_policy, kgrid, kfine): #WiP to vectorize and use of expected_marginal_utility
+    @time_method
+    def _static_EEE(self, k_policy, kgrid, kfine): #WiP to vectorize and use of expected_marginal_utility
         '''
         Compute the Euler Equation Error of a policy function of shape (nz, nk) for each grid point
         
@@ -418,26 +416,28 @@ class agg_uncertainty:
         -------
         Euler Equation Error for each state of shape (nz, nk).
         '''
-        
-        euler_error = np.zeros((self.nz, len(kfine)))
 
-        for z_i, z in enumerate(self.state):
-            policy = interp1d(kgrid, k_policy[z_i, :], kind='cubic', fill_value='extrapolate')
-            k_next = policy(kfine)
-            # consumption today given budget constraint implied by policy
-            cash = z * kfine**self.alpha + (1 - self.delta) * kfine
-            c = cash - k_next
-            # compute implied consumption from Euler equation
-            cash_next = self.state[:, None] * k_next**self.alpha + (1 - self.delta) * k_next
-            c_next = cash_next - policy(k_next)
-            MPK_prime = self.alpha * self.state[:, None] * k_next**(self.alpha-1) + 1 - self.delta
-            MU_prime = MPK_prime / c_next
-            Emu = self.Q[z_i, :] @ MU_prime # expected marginal utility
-            c_implied = 1 / (self.beta * Emu)
-            
-            # Euler error as relative deviation
-            euler_error[z_i, :] = np.abs((c - c_implied) / c_implied)
+        x = self.state[:, None] * kgrid[None, :]**self.alpha + (1 - self.delta) * kgrid[None, :]
+        policy_interp = [
+            interp1d(x[z, :], k_policy[z, :], kind='cubic', fill_value='extrapolate')
+            for z in range(len(self.state))
+        ]
         
+        # consumption today given budget constraint implied by policy
+        cash_fine = self.state[:, None] * kfine[None, :]**self.alpha + (1 - self.delta) * kfine[None, :]
+        k_next = evaluate_policy(policy_interp, cash_fine)
+        c = cash_fine - k_next
+        
+        # compute implied consumption from Euler equation
+        # given policy compute x, compute k next period and get x_next to get k''. k'' and k' pin down c_t+1 which pins down c_t 
+        cash_next = self.state[:, None] * k_next**self.alpha + (1 - self.delta) * k_next
+        k_next_next = evaluate_policy(policy_interp, cash_next)
+        
+        Emu = expected_marginal_utility(k_next, self.state, k_next_next, self.Q, self.alpha, self.delta)
+        c_implied = 1 / (self.beta * Emu)
+        
+        euler_error = np.abs((c - c_implied) / c_implied)
+       
         return euler_error
 
     @time_method
@@ -474,90 +474,30 @@ class agg_uncertainty:
         k_imp   = np.empty(T)
         c_imp     = np.empty(T)
         k_imp[0] = kgrid[0] # initial value for capital
-        
+        xgrid = self.state[:, None] * kgrid[None,:]**(self.alpha) + (1 - self.delta) * kgrid[None, :]
         
         for t in range(T):
             # state shock level
-            z = self.state[path[t]]
+            zt = self.state[path[t]]
             # state shock determines policy
-            policy = interp1d(kgrid, k_policy[path[t], :], kind='cubic', fill_value='extrapolate')
-            k_current = np.array([k_imp[t]])
-            k_next = policy(k_current)
+            xt = zt * k_imp[t]**(self.alpha) + (1 - self.delta) * k_imp[t]
+            policy = interp1d(xgrid[path[t], :], k_policy[path[t], :], kind='cubic', fill_value='extrapolate')
+            
+            k_next = policy(np.array([xt]))
+            x_next = zt * k_next**(self.alpha) + (1 - self.delta) * k_next
+            k_next_next = policy(x_next)
+            
+            # given policy compute x, compute k next period and get x_next to get k''. k'' and k' pin down c_t+1 which pins down c_t
 
             # compute implied consumption from Euler equation
-            Emu = expected_marginal_utility(k_current, self.state, k_next, self.Q[path[t]], self.alpha, self.delta)
+            Emu = expected_marginal_utility(k_next, self.state, k_next_next, self.Q[path[t]], self.alpha, self.delta)
             c_imp[t] = 1 / (self.beta * Emu)
             
             if t < T-1: 
-                k_imp[t+1] = z * k_imp[t] ** self.alpha + (1 - self.delta) * k_imp[t] - c_imp[t]
+                k_imp[t+1] = zt * k_imp[t] ** self.alpha + (1 - self.delta) * k_imp[t] - c_imp[t]
                 
         return (k_imp[burn_in:], c_imp[burn_in:], path[burn_in:])
     
-    
-    @time_method
-    def _dynamic_EE_old(self, k_policy, kgrid, T, burn_in, seed=44, initial_state_idx=None): #WiP
-        """
-        Generate a time series implied by the Euler equation with log utility.
-    
-        Parameters
-        ----------
-        k_policy : ndarray
-            Policy function for capital, shape (nz, nk).
-        kgrid : ndarray
-            Grid for capital, shape (nk,).
-        T : int
-            Number of periods to simulate.
-        seed : int, optional
-            Random seed for reproducibility (default 44).
-        initial_state_idx : int, optional
-            Initial index of the exogenous state (default: random).
-    
-        Returns
-        -------
-        k_imp : ndarray
-            Implied capital path over time.
-        c_imp : ndarray
-            Implied consumption path over time (from Euler equation).
-        z_level : ndarray
-            Realizations of the exogenous state over time.
-        """
-        np.random.seed(seed)
-        
-        if initial_state_idx is None:
-            initial_state_idx = np.random.randint(0, self.nz)
-    
-        path = np.zeros(T, dtype=int)
-        k_imp   = np.empty(T)
-        z_level  = np.empty(T)
-        c_imp     = np.empty(T)
-
-        
-        path[0] = initial_state_idx
-        z_level[0] = self.state[initial_state_idx]
-        k_imp[0] = kgrid[10] # initial value for capital
-        cdf_Q = np.cumsum(self.Q, axis=1)  # Compute CDF for each row
-        
-        
-        for t in range(T):
-            # state shock determines policy
-            policy = interp1d(kgrid, k_policy[path[t], :], kind='cubic', fill_value='extrapolate')
-            k_next = policy(k_imp[t])
-            
-            # compute implied consumption from Euler equation
-            cash_next = self.state[:, None] * k_next**self.alpha + (1 - self.delta) * k_next
-            c_next = cash_next - policy(k_next)
-            MPK_prime = self.alpha * self.state[:, None] * k_imp[t]**(self.alpha-1) + 1 - self.delta
-            MU_prime = MPK_prime / c_next
-            Emu = self.Q[path[t], :] @ MU_prime
-            c_imp[t] = 1 / (self.beta * Emu)
-            
-            if t < T-1: 
-                u = np.random.rand()  # Uniform random number between 0 and 1
-                path[t+1] = np.searchsorted(cdf_Q[path[t]], u) # shock
-                z_level[t+1] = self.state[path[t+1]]
-                k_imp[t+1] = z_level[t] * k_imp[t] ** self.alpha + (1 - self.delta) * k_imp[t] - c_imp[t]
-                
-        return (k_imp[burn_in:], c_imp[burn_in:], path[burn_in:])
     
 def generate_shock_path(Q, T, seed=44, initial_state_idx=None):
     '''
@@ -630,5 +570,15 @@ def expected_marginal_utility(kgrid, theta, k_policy, Q, alpha, delta):
     Emu = Q @ MU_prime
     return Emu
 
+
+def evaluate_policy(policy_list, cash_array):
+    """
+    Evaluate row-wise interpolation for a (nz, nk) policy function
     
+    policy_list : list of 1D interp1d functions, one per state
+    cash_array  : 2D array, shape (n_states, n_points)
+    Returns k_next with same shape as cash_array
+    """
+    return np.array([policy_list[z](cash_array[z, :]) for z in range(cash_array.shape[0])])
+
     
