@@ -34,7 +34,7 @@ class Household:
         print(f"For more info, access it class {type(self).__name__} stored youre_class_name.agrid")
         
         
-    def _solve_EGM(self, r, w, max_iter=1000, tol=1e-8, lamb = 0.7):
+    def _solve_EGM(self, r, w, max_iter=1000, tol=1e-8, lamb = 0.7, verbose=False):
         na = len(self.agrid)
         nz = len(self.econ.states)
         k_policy = np.zeros((nz, na))
@@ -69,12 +69,12 @@ class Household:
             diff = np.linalg.norm(k_policy_new - k_policy)
             diff_list[i] = diff
             if diff < (np.linalg.norm(k_policy))*tol:
-               print(f"Converged in {i} iterations")
-               print("Policy saved under self.policy!")
-               self.policy = OptimalPolicy(self.agrid, cash_imp, self.b)
-               return None
+                self.policy = OptimalPolicy(self.agrid, cash_imp, self.b)
+                if verbose:
+                    print(f"Converged in {i} iterations")
+                    print("Policy saved under self.policy!")
+                return None
             k_policy = k_policy_new * lamb + k_policy * (1 - lamb)
-           
         print("Max iterations reached")
         print(diff)
         print(f"required value: {(1+np.linalg.norm(k_policy))*tol}")
@@ -82,8 +82,9 @@ class Household:
 
     def _simulate_stationary_distribution(
             self,
-            w,
             r,
+            w,
+            verbose=False,
             H=100, 
             T=500, 
             burn_in=200
@@ -94,8 +95,8 @@ class Household:
             # 1. Setup
         nz = len(self.econ.states)
         
-        # Initialize assets (start everyone at steady state or 0)
-        a = np.zeros(H) 
+        # Initialize assets at random grid points
+        a = np.random.choice(self.agrid, size=H) 
         
         # Initialize states (randomly across z)
         z_idx = np.random.choice(nz, size=H)
@@ -103,7 +104,8 @@ class Household:
         # Pre-calculate Cumulative Probability for Markov transition
         Q_cumsum = np.cumsum(self.econ.Q, axis=1)
         K_series = []
-        print(f"Simulating {H} agents for {T} periods...")
+        if verbose:
+            print(f"Simulating {H} agents for {T} periods...")
     
         # 2. Simulation Loop
         for t in range(T):
@@ -186,7 +188,7 @@ class GE:
     def __init__(self, household):
         self.hh = household
         self.econ = household.econ
-        self.history = {'r':[], 'K_s':[], 'K_d':[], 'w':[]}
+        
 
     def capital_demand(self, r):
         alpha = self.econ.alpha
@@ -206,23 +208,22 @@ class GE:
         return K_s
 
     def market_clearing(self, r):
-        print(f"Solving for r: {r}.4f")
+        self.iter_count += 1
+        print(f"Solving for r: {r:.4f}")
         K_d = self.capital_demand(r)
         K_s = self.capital_supply(r)
         return K_d - K_s
 
     def solve(self, r_min=None, r_max=None):
+        self.iter_count = 0
+        self.history = {'r':[], 'K_s':[], 'K_d':[], 'w':[]}
         eps = 1e-10
         if r_min is None:
             r_min = -self.econ.delta + eps
         if r_max is None:
             r_max = (1 / self.econ.beta) - 1 -eps
-        fa = self.market_clearing(r_min)
-        fb = self.market_clearing(r_max)
-        print(f"market_clearing({r_min}) = {fa}, market_clearing({r_max}) = {fb}")
-        if fa * fb > 0:
-            raise ValueError("market_clearing does not change sign in the interval. Adjust r_min/r_max.")
-        r_star = opt.bisect(self.market_clearing, r_min, r_max)
+        r_star = opt.bisect(self.market_clearing, r_min, r_max, xtol = 1e-6)
+        print(f"Bisection finished after {self.iter_count} iterations.")
         return r_star
     
 class OptimalPolicy:
