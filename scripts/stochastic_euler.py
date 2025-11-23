@@ -92,7 +92,7 @@ class discretize_AR1:
         dz = (zgrid[1] - zgrid[0])    
         
         # Mean conditional on today's state
-        mean = self.rho*zgrid[:, None] + (1-self.rho)*self.mu
+        mean = self.rho*zgrid[:, None] + self.mu
         upper_std = (zgrid[None, :] + dz/2 - mean) / self.sigma
         lower_std = (zgrid[None, :] - dz/2 - mean) / self.sigma
 

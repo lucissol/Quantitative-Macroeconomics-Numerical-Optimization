@@ -7,7 +7,7 @@ About utiltiy and macro models
 """
 import numpy as np
 
-def utility_CRRA(x, gamma):
+def utility_CRRA(c, gamma):
     '''
     Return utility of 
 
@@ -24,11 +24,14 @@ def utility_CRRA(x, gamma):
         DESCRIPTION.
 
     '''
-    if gamma == 1:
-        return np.where(x > 1e-12, np.log(x), np.log(1e-12))
-    else:
-        return ((x)**(1-gamma)) / (1 - gamma)
+    u = np.full_like(c, -np.inf, dtype=float)
+    pos_c = c > 0 
     
+    if gamma == 1:
+        u[pos_c] = np.log(c[pos_c])
+    else:
+        u[pos_c] = ((c[pos_c])**(1-gamma)) / (1 - gamma)
+    return u
     
 def marg_util_CRRA(x, gamma):
     if gamma == 1:
@@ -36,7 +39,7 @@ def marg_util_CRRA(x, gamma):
     else:
         return x**(-gamma)
     
-def comp_util_grid(kgrid, kgrid, alpha, gamma):
+def comp_util_grid(kgrid, alpha, gamma):
 
     c = kgrid[:, None]**alpha - kgrid[None, :]
 
