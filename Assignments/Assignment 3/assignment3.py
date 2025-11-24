@@ -6,13 +6,9 @@ Created on Mon Nov 17 17:27:48 2025
 """
 #%%
 import numpy as np
-from scripts.functions import ValueFunctionMethods
 from scripts.stochastic_euler import discretize_AR1
-from scripts.stochastic_euler import agg_uncertainty
 import matplotlib.pyplot as plt
-from scripts.utility import utility_CRRA
-from scripts.aiyagari import *
-
+from scripts.aiyagari import OptimalPolicy, Economy, Household, GE
 #%%
 alpha = 0.36
 beta = 0.96
@@ -30,15 +26,14 @@ print(eps_grid)
 economy_values = Economy(alpha, beta, delta, eps_grid, eps_Q)
 
 sigma = 1
-na = 1000
+na = 10000
 b = 0
 household_aiy = Household(economy_values, sigma, na, b)
-#%%
 #%%
 L = 1 
 r_min = 0.0005
 r_max = (1/beta - 1 - 1e-10)
-r_grid = np.linspace(r_min, r_max, 25)
+r_grid = np.linspace(r_min, r_max, 15)
 points = []
 for r in r_grid:
     K_d = (alpha/(r + delta))**(1/(1 - alpha)) * L
@@ -70,10 +65,7 @@ plt.legend()
 plt.grid(True)
 plt.show() # Make sure to include plt.show() to display the plot
 
-
-
 #%% setting up the grids
-
 ge = GE(household_aiy)
 
 #%%
@@ -97,16 +89,45 @@ plt.show()
 #%%
 plt.plot(ge.history['K_s'], ge.history['r'], 'o-', label='K_s')
 plt.plot(ge.history['K_d'], ge.history['r'], 'x-', label='K_d')
-#%%
-kd = (alpha / (r_star + delta))**(1/(1-alpha))
-wd = (1 - alpha) * (kd)**alpha
-agrid = hh.agrid
-#%%
-hh._solve_EGM(r_star, wd)
-#%%
-xgrid = (1+r_star) * agrid[None, :] + wd * eps_grid[:, None]
-#%%
-hh.policy(xgrid)
+
+#%% what happens when sigma = 2?
+household_aiy2 = Household(economy_values, sigma=2, na=na, b=b)
+ge2 = GE(household_aiy2)
 
 #%%
-ge.capital_supply(r_star)
+r_star = ge2.solve(r_min=0)
+print(f"Equilibrium interest rate: {r_star:.4f}")
+print(f"Capital supply/demand at r*: {ge.history['K_s'][-1]:.2f} / {ge.history['K_d'][-1]:.2f}")
+#%%
+index2 = np.arange(0, len(ge2.history['K_s']))
+plt.plot(index2, ge2.history['r'], 'x-', label='r')
+plt.xlabel("Capital")
+plt.ylabel("Interest rate r")
+plt.legend()
+plt.ylim([-0.01, 0.1])
+plt.show()
+#%%
+plt.plot(index2, ge2.history['K_s'], 'o-', label='K_s')
+plt.plot(index2, ge2.history['K_d'], 'x-', label='K_d')
+plt.legend()
+plt.show()
+#%%
+plt.plot(ge2.history['K_s'], ge2.history['r'], 'o-', label='K_s')
+plt.plot(ge2.history['K_d'], ge2.history['r'], 'x-', label='K_d')
+
+# answer: sigma reflects the intertemporal elasticity of substitution meaning that with sigma = 2, households react more sensitive to interest rate changes
+# As a result aggregate savings increase and the interest decreases in favor for the firms!
+#%%
+plt.hist(ge.a, label = "sigma 2")
+plt.legend()
+plt.show()
+
+#%%
+plt.hist(ge2.a, label = "sigma 2")
+plt.legend()
+plt.show()
+# collection of results:
+    # sigma increases risk aversion of households
+    # reflects in lower interest rate
+    # more households try to accumulate assets thus more compressed right tail
+    # because of lower interest rate, maximum savings decrease!

@@ -6,11 +6,23 @@ Script to run ayagari model
 """
 import numpy as np
 from functools import wraps
-from scripts.utility import utility_CRRA, marg_util_CRRA
 from scipy.sparse.linalg import spsolve
 from scipy.sparse import csr_matrix, identity
 from scipy.interpolate import interp1d
 from scipy import optimize as opt
+import time
+
+def time_method(func):
+    """Decorator to time class methods."""
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        start = time.perf_counter()
+        result = func(self, *args, **kwargs)
+        elapsed = time.perf_counter() - start
+        print(f" {func.__name__} took {elapsed:.3f} seconds")
+        return result
+    return wrapper
+
 
 class Economy:
     def __init__(self, alpha, beta, delta, states, Q):
@@ -33,7 +45,7 @@ class Household:
         print(f"Defined asset grid on {np.min(self.agrid):.2f} - {np.max(self.agrid):.2f}")
         print(f"For more info, access it class {type(self).__name__} stored youre_class_name.agrid")
         
-        
+    @time_method
     def _solve_EGM(self, r, w, max_iter=1000, tol=1e-8, lamb = 0.7, verbose=False):
         na = len(self.agrid)
         nz = len(self.econ.states)
@@ -69,7 +81,7 @@ class Household:
             diff = np.linalg.norm(k_policy_new - k_policy)
             diff_list[i] = diff
             if diff < (np.linalg.norm(k_policy))*tol:
-                self.policy = OptimalPolicy(self.agrid, cash_imp, self.b)
+                self.policy = OptimalPolicy(cash_imp, self.agrid, self.b)
                 if verbose:
                     print(f"Converged in {i} iterations")
                     print("Policy saved under self.policy!")
@@ -80,6 +92,7 @@ class Household:
         print(f"required value: {(1+np.linalg.norm(k_policy))*tol}")
         return diff_list, constr
 
+        
     def _simulate_stationary_distribution(
             self,
             r,
@@ -178,7 +191,7 @@ def construct_grid(b, max_state, na, w_ref=2, zeta=0.15):
         DESCRIPTION.
 
     '''
-    a_max = 50 * w_ref * max_state 
+    a_max = 21 * w_ref * max_state 
     s = np.linspace(0, 1, na)
     zeta = 0.15
     return -b + (a_max + b) * s**(1/zeta)
@@ -197,9 +210,9 @@ class GE:
 
     def capital_supply(self, r):
         K_d = self.capital_demand(r)
-        w = (1 - self.econ.alpha) * (K_d)**self.econ.alpha
+        w = (1 - self.econ.alpha) * (self.econ.alpha / (r + self.econ.delta))**(self.econ.alpha / (1 - self.econ.alpha))
         self.hh._solve_EGM(r, w)
-        _, K_s = self.hh._simulate_stationary_distribution(r, w)
+        self.a, K_s = self.hh._simulate_stationary_distribution(r, w, T = 5000, burn_in = 1500)
         # track
         self.history['r'].append(r)
         self.history['K_s'].append(K_s)
@@ -209,11 +222,12 @@ class GE:
 
     def market_clearing(self, r):
         self.iter_count += 1
-        print(f"Solving for r: {r:.4f}")
+        print(f"Solving for r: {r:.10f}")
         K_d = self.capital_demand(r)
         K_s = self.capital_supply(r)
         return K_d - K_s
-
+    
+    @time_method
     def solve(self, r_min=None, r_max=None):
         self.iter_count = 0
         self.history = {'r':[], 'K_s':[], 'K_d':[], 'w':[]}
@@ -222,12 +236,12 @@ class GE:
             r_min = -self.econ.delta + eps
         if r_max is None:
             r_max = (1 / self.econ.beta) - 1 -eps
-        r_star = opt.bisect(self.market_clearing, r_min, r_max, xtol = 1e-6)
-        print(f"Bisection finished after {self.iter_count} iterations.")
+        r_star = opt.brentq(self.market_clearing, r_min, r_max, xtol = 1e-10)
+        print(f"Brent finished after {self.iter_count} iterations.")
         return r_star
     
 class OptimalPolicy:
-    def __init__(self, a_prime, cash, b_constraint):
+    def __init__(self, cash, a_prime, b_constraint):
         """
         a_prime: The fixed grid of assets chosen for tomorrow (1D array)
         cash: The endogenous resource grid computed by EGM (nz, na)
@@ -308,9 +322,6 @@ class OptimalPolicy:
         
         # Return item if original input was scalar, else return array
         return final_a_prime.item() if final_a_prime.size == 1 and z_idx.size == 1 else final_a_prime
-    
-    
-    
 
     
 # work in progess, solving the aiyagari model with Howard's improvement Algorithm and sparse matrices
