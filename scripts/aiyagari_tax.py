@@ -24,7 +24,7 @@ def time_method(func):
     return wrapper
 
 
-class Economy:
+class Economy_tax:
     def __init__(self, alpha, beta, delta, states, Q):
         self.alpha = alpha
         self.beta = beta
@@ -32,7 +32,7 @@ class Economy:
         self.states = states
         self.Q = Q
         
-class Household:
+class Household_tax:
     def __init__(self, Economy, sigma, na, b):
         self.econ = Economy
         self.sigma = sigma
@@ -46,13 +46,13 @@ class Household:
         print(f"For more info, access it class {type(self).__name__} stored youre_class_name.agrid")
         
     @time_method
-    def _solve_EGM(self, r, w, max_iter=1000, tol=1e-8, lamb = 0.7, verbose=False):
+    def _solve_EGM_tax(self, r, tau, w, max_iter=1000, tol=1e-8, lamb = 0.7, verbose=False):
         na = len(self.agrid)
         nz = len(self.econ.states)
         k_policy = np.zeros((nz, na))
         k_policy[:] = self.agrid * 0.5
         k_policy_new = np.zeros((nz, na))
-        xgrid = comp_ressources(self.agrid, r, w, self.econ.states)
+        xgrid = comp_ressources_tax(self.agrid, r, tau, w, self.econ.states)
         diff_list = np.zeros(max_iter)
         constr = np.zeros(max_iter)
 
@@ -93,9 +93,10 @@ class Household:
         return diff_list, constr
 
         
-    def _simulate_stationary_distribution(
+    def _simulate_stationary_distribution_tax(
             self,
             r,
+            tau,
             w,
             verbose=False,
             H=100, 
@@ -140,7 +141,7 @@ class Household:
             z_idx = z_next
         
             # policy maps cash -> assets
-            cash = (1+r)*a + w*self.econ.states[z_idx]
+            cash = (1+r * (1 - tau) )*a + (1 - tau) * w*self.econ.states[z_idx]
             a_prime = self.policy.simulate_policy(z_idx, cash) # or use self.policy.__call__() -> USP of __call__
     
             a = a_prime
@@ -163,8 +164,8 @@ def Emu(c, r, sigma, beta, Q):
     return Q @ C_z_scaled
  
     
-def comp_ressources(agrid, r, w, states):
-    return (1+r) * agrid[None, :] + w * states[:, None]
+def comp_ressources_tax(agrid, r, tau, w, states):
+    return (1+ (1-tau) * r) * agrid[None, :] + (1-tau) * w * states[:, None]
 
 
 def construct_grid(b, max_state, na, w_ref=2, zeta=0.15):
@@ -197,119 +198,8 @@ def construct_grid(b, max_state, na, w_ref=2, zeta=0.15):
     return -b + (a_max + b) * s**(1/zeta)
 
         
-class GE:
-    def __init__(self, household):
-        self.hh = household
-        self.econ = household.econ
-        
 
-    def capital_demand(self, r):
-        alpha = self.econ.alpha
-        delta = self.econ.delta
-        return (alpha / (r + delta))**(1/(1-alpha))
-
-    def capital_supply(self, r):
-        K_d = self.capital_demand(r)
-        w = (1 - self.econ.alpha) * (self.econ.alpha / (r + self.econ.delta))**(self.econ.alpha / (1 - self.econ.alpha))
-        self.hh._solve_EGM(r, w)
-        self.a, K_s = self.hh._simulate_stationary_distribution(r, w, T = 5000, burn_in = 1500)
-        # track
-        self.history['r'].append(r)
-        self.history['K_s'].append(K_s)
-        self.history['K_d'].append(K_d)
-        self.history['w'].append(w)
-        return K_s
-
-    def market_clearing(self, r):
-        self.iter_count += 1
-        print(f"Solving for r: {r:.10f}")
-        K_d = self.capital_demand(r)
-        K_s = self.capital_supply(r)
-        return K_d - K_s
     
-    @time_method
-    def solve(self, r_min=None, r_max=None):
-        self.iter_count = 0
-        self.history = {'r':[], 'K_s':[], 'K_d':[], 'w':[]}
-        eps = 1e-10
-        if r_min is None:
-            r_min = -self.econ.delta + eps
-        if r_max is None:
-            r_max = (1 / self.econ.beta) - 1 -eps
-        r_star = opt.brentq(self.market_clearing, r_min, r_max, xtol = 1e-10)
-        print(f"Brent finished after {self.iter_count} iterations.")
-        return r_star
-
-class GE_tax:
-    def __init__(self, household, G):
-        self.hh = household
-        self.econ = household.econ
-        self.G = G
-        
-
-    def capital_demand(self, r):
-        alpha = self.econ.alpha
-        delta = self.econ.delta
-        K_d = (alpha / (r + delta))**(1/(1-alpha))
-        self.history['K_d'].append(K_d)
-        return K_d
-
-    def capital_supply(self, r, tau):
-        alpha = self.econ.alpha
-        delta = self.econ.delta
-        
-        net_r = (1-tau)*r
-        w = (1 - self.econ.alpha) * (alpha / (r + delta))**(alpha / (1 - alpha))
-        net_w = (1-tau) * w
-        self.hh._solve_EGM(net_r, net_w)
-        self.a, K_s = self.hh._simulate_stationary_distribution(net_r, net_w, T = 5000, burn_in = 1500)
-        # track
-
-        return K_s, w
-
-    def market_clearing(self, r):
-        self.iter_count += 1
-        print(f"Solving for r: {r:.10f}")
-        tau = self.tau_current
-        for _ in range(50):
-            K_s, w = self.capital_supply(r, tau)
-            tau_new = self.implied_tau(r, K_s, w)
-            if abs(tau_new - tau) < 1e-4:
-                break
-        self.tau_current = 0.8 * tau + 0.2 * tau_new
-        self.K_s_current = K_s
-        print(f"Solving with actual guess for tau: {self.tau_current}")
-        K_d = self.capital_demand(r)
-        self.history['r'].append(r)
-        self.history['K_s'].append(K_s)
-        self.history['w'].append(w)
-        return K_d - K_s
-    
-
-    def implied_tau(self, r, K_s, w):
-        return self.G / (r*K_s + w)
-    
-    @time_method
-    def solve(self, r_min=None, r_max=None, tau0=0.1):
-        self.tau_current = tau0
-        self.iter_count = 0
-        self.history = {'r':[], 'K_s':[], 'K_d':[], 'w':[]}
-        eps = 1e-10
-        if r_min is None:
-            r_min = -self.econ.delta + eps
-        if r_max is None:
-            r_max = (1 / self.econ.beta) - 1 -eps
-            
-        r_star  = opt.brentq(self.market_clearing, r_min, r_max, xtol = 1e-5)
-
-        self.r_star = r_star
-        self.K_star = self.K_s_current
-        self.tau_star = self.tau_current
-        print(f"Brent finished after {self.iter_count} iterations.")
-        return r_star, self.tau_current, self.K_s_current
-    
-        
-        
 class OptimalPolicy:
     def __init__(self, cash, a_prime, b_constraint):
         """

@@ -8,7 +8,7 @@ Created on Mon Nov 17 17:27:48 2025
 import numpy as np
 from scripts.stochastic_euler import discretize_AR1
 import matplotlib.pyplot as plt
-from scripts.aiyagari import OptimalPolicy, Economy, Household, GE
+from scripts.aiyagari import OptimalPolicy, Economy, Household, GE, GE_tax
 #%%
 alpha = 0.36
 beta = 0.96
@@ -19,14 +19,14 @@ sigma_eps = 0.1743
 mu_eps = (- sigma_eps / (2 * (1-rho**2))) 
 mu_eps_x = mu_eps * (1- rho)
 eps_process = discretize_AR1(rho, mu_eps_x, sigma_eps)
-eps_grid_log, eps_Q = eps_process.Rouwenhorst(10)
+eps_grid_log, eps_Q = eps_process.Rouwenhorst(2)
 eps_grid = np.exp(eps_grid_log)
 print(eps_grid)
 
 economy_values = Economy(alpha, beta, delta, eps_grid, eps_Q)
 
 sigma = 1
-na = 10000
+na = 500
 b = 0
 household_aiy = Household(economy_values, sigma, na, b)
 #%%
@@ -52,6 +52,7 @@ r_demand = alpha * capital_grid**(alpha-1) - delta
 #plt.plot(capital_grid, ) # xx line at y level 1/beta   -1
 #%%
 plt.axhline(y=1/beta - 1, color='k', linestyle='--', label='r = 1/beta - 1')
+
 plt.plot(capital_grid, r_demand, label="Capital demand")
 plt.plot(capital_grid, r_sup, label="Capital supply")
 plt.xlabel("Capital (K)")
@@ -91,6 +92,7 @@ plt.plot(ge.history['K_s'], ge.history['r'], 'o-', label='K_s')
 plt.plot(ge.history['K_d'], ge.history['r'], 'x-', label='K_d')
 
 #%% what happens when sigma = 2?
+###############################################################################################
 household_aiy2 = Household(economy_values, sigma=2, na=na, b=b)
 ge2 = GE(household_aiy2)
 
@@ -131,3 +133,27 @@ plt.show()
     # reflects in lower interest rate
     # more households try to accumulate assets thus more compressed right tail
     # because of lower interest rate, maximum savings decrease!
+    
+#%% Aiyagari with taxes!
+household_aiy_tax = Household(economy_values, sigma, na, b)
+ge2_tax = GE_tax(household_aiy_tax, G = 0.1)
+collect_tax = ge2_tax.solve(r_min = 0.02, r_max = 0.05)
+# Brent finished after 15 iterations.
+# solve took 438.409 seconds - expected run time!!!
+#%%
+index3 = np.arange(0, len(ge2_tax.history['K_s']))
+plt.plot(index2, ge2_tax.history['r'], 'x-', label='r')
+plt.xlabel("Capital")
+plt.ylabel("Interest rate r")
+plt.legend()
+plt.ylim([-0.01, 0.1])
+plt.show()
+#%%
+plt.plot(index3, ge2_tax.history['K_s'], 'o-', label='K_s')
+plt.plot(index3, ge2_tax.history['K_d'], 'x-', label='K_d')
+plt.legend()
+plt.show()
+#%%
+plt.plot(ge2_tax.history['K_s'], ge2_tax.history['r'], 'o-', label='K_s')
+plt.plot(ge2_tax.history['K_d'], ge2_tax.history['r'], 'x-', label='K_d')
+plt.show()
