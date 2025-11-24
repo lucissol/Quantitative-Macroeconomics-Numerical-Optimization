@@ -11,6 +11,7 @@ from scipy.sparse import csr_matrix, identity
 from scipy.interpolate import interp1d
 from scipy import optimize as opt
 import time
+import numba as njit
 
 def time_method(func):
     """Decorator to time class methods."""
@@ -91,7 +92,20 @@ class Household:
         print(diff)
         print(f"required value: {(1+np.linalg.norm(k_policy))*tol}")
         return diff_list, constr
-
+    
+    def _solve_EGM_njit(self, r, w):
+        
+        agrid, cash_imp =_solve_EGM_numba(
+            agrid = self.agrid,
+            states = self.econ.states,
+            Q = self.econ.Q,
+            r = r,
+            w = w,
+            b = self.b,
+            beta = self.econ.beta,
+            sigma = self.sigma
+            )
+        return (OptimalPolicy(self.agrid, cash_imp, self.b))
         
     def _simulate_stationary_distribution(
             self,
@@ -161,7 +175,80 @@ def Emu(c, r, sigma, beta, Q):
     C_z = c_clipped**(-sigma)
     C_z_scaled = C_z * (1+r) * beta
     return Q @ C_z_scaled
- 
+
+ @njit
+ def interp_linear_1d(x_grid, y_grid, x_query):
+     """
+     Manual linear interpolation compatible with Numba.
+     Maps x_query points to values based on (x_grid, y_grid).
+     Assumes x_grid is sorted.
+     """
+     res = np.empty_like(x_query)
+     # We use searchsorted (binary search) which is very fast
+     indices = np.searchsorted(x_grid, x_query)
+     
+     for i in range(len(x_query)):
+         idx = indices[i]
+         
+         # Handle extrapolation (bounds)
+         if idx == 0:
+             res[i] = y_grid[0]
+         elif idx >= len(x_grid):
+             res[i] = y_grid[-1]
+         else:
+             # Linear interpolation formula
+             x0 = x_grid[idx - 1]
+             x1 = x_grid[idx]
+             y0 = y_grid[idx - 1]
+             y1 = y_grid[idx]
+             
+             weight = (x_query[i] - x0) / (x1 - x0)
+             res[i] = y0 + (y1 - y0) * weight
+             
+     return res
+ @njit
+ def _solve_EGM_numba(agrid, states, Q, r, w, b, beta, sigma, max_iter=1000, tol=1e-8, lamb = 0.7, verbose=False):
+     na = len(agrid)
+     nz = len(states)
+     k_policy = np.zeros((nz, na))
+     k_policy[:] = agrid * 0.5
+     k_policy_new = np.zeros((nz, na))
+     xgrid = comp_ressources(agrid, r, w, states)
+     
+     for i in range(max_iter):
+         c_next = xgrid - k_policy
+         # compute implied consumption today
+         # compute C_t**-sigma = E(c-t+1**-sigma) * (R+beta)
+         marginal_utility = Emu(c_next, r, sigma, beta, Q)
+         # invert ot get c_today!
+         c_today = (marginal_utility) ** (-1/sigma)
+         # compute implied cash at hand
+         cash_imp = c_today + agrid
+         for z_i in range(nz):
+
+             # Interpolate: resources_today -> capital_today
+             policy_interp = interp1d(cash_imp[z_i, :], agrid, kind='linear',
+                    bounds_error=False, fill_value="extrapolate") 
+             k_policy_new[z_i, :] = policy_interp(xgrid[z_i, :])
+             binding_indices = xgrid[z_i, :] < cash_imp[z_i, 0]
+             k_policy_new[z_i, binding_indices] = -b
+         # lowest endogenous resource point (cash_imp[z_i, 0]) means 
+         # the constraint is binding. cash_imp is unconstraiend since agrid[0] == -b
+         # Identify points where we are poorer than the poorest unconstrained agent
+
+         # Check convergence
+         diff = np.max(np.abs(k_policy_new - k_policy))
+         if diff < (np.linalg.norm(k_policy))*tol:
+             if verbose:
+                 print(f"Converged in {i} iterations")
+                 print("Policy saved under self.policy!")
+             return agrid, cash_imp, b
+         k_policy = k_policy_new * lamb + k_policy * (1 - lamb)
+     print("Max iterations reached")
+     print(diff)
+     print(f"required value: {(1+np.linalg.norm(k_policy))*tol}")
+     return diff_list, constr
+
     
 def comp_ressources(agrid, r, w, states):
     return (1+r) * agrid[None, :] + w * states[:, None]
