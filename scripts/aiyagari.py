@@ -25,6 +25,9 @@ def time_method(func):
 
 
 class Economy:
+    '''
+    Class to store key values of th economy
+    '''
     def __init__(self, alpha, beta, delta, states, Q):
         self.alpha = alpha
         self.beta = beta
@@ -33,7 +36,30 @@ class Economy:
         self.Q = Q
         
 class Household:
+    '''
+    Class to store key values of the household
+    '''
     def __init__(self, Economy, sigma, na, b):
+        '''
+        Initialize hosuehold with values of the economy and savings setting
+
+        Parameters
+        ----------
+        Economy : class
+            Economic variables from class Economy.
+        sigma : float
+            Coefficient of relative risk aversion.
+        na : int
+            Number of grid points.
+        b : float
+            Allowed number of debt for the houesholds.
+            Budget constraint of next period's assets in form a'>= -b.
+
+        Returns
+        -------
+        None.
+
+        '''
         self.econ = Economy
         self.sigma = sigma
         self.b = b      
@@ -47,27 +73,48 @@ class Household:
         
     @time_method
     def _solve_EGM(self, r, w, max_iter=1000, tol=1e-8, lamb = 0.7, verbose=False):
+        '''
+        Solve Aiyagari household problem with EGM method.
+
+        Parameters
+        ----------
+        r : float
+            Exogeneous interest rate.
+        w : float
+            Exogeneous wage.
+        max_iter : int, optional
+            Maxixum numbers of iteration in the EGM solver. The default is 1000.
+        tol : float, optional
+            Tolerance for policy to converge. The default is 1e-8.
+        lamb : float, optional
+            Dampening factor. The default is 0.7.
+        verbose : boolean, optional
+            Print statements. The default is False.
+
+        Returns
+        -------
+        Standard return is saving optimal cash at hand -> assets next periods mapping to class OptimalPolicy.
+        Policy funciton is saved as self.policy(xgrid, agrid) to get . For more detials inspect class OptimalPolicy!
+        '''
         na = len(self.agrid)
         nz = len(self.econ.states)
         k_policy = np.zeros((nz, na))
         k_policy[:] = self.agrid * 0.5
         k_policy_new = np.zeros((nz, na))
         xgrid = comp_ressources(self.agrid, r, w, self.econ.states)
-        diff_list = np.zeros(max_iter)
-        constr = np.zeros(max_iter)
 
         for i in range(max_iter):
             c_next = xgrid - k_policy
             # compute implied consumption today
             # compute C_t**-sigma = E(c-t+1**-sigma) * (R+beta)
             marginal_utility = Emu(c_next, r, self.sigma, self.econ.beta, self.econ.Q)
-            # invert ot get c_today!
+            # invert to get c_today!
             c_today = (marginal_utility) ** (-1/self.sigma)
             # compute implied cash at hand
             cash_imp = c_today + self.agrid
             for z_i in range(nz):
 
-                # Interpolate: resources_today -> capital_today
+                # Interpolate: resources_today -> capital_tomorrow
                 policy_interp = interp1d(cash_imp[z_i, :], self.agrid, kind='linear',
                        bounds_error=False, fill_value="extrapolate") 
                 k_policy_new[z_i, :] = policy_interp(xgrid[z_i, :])
@@ -75,12 +122,11 @@ class Household:
                 k_policy_new[z_i, binding_indices] = -self.b           
             # lowest endogenous resource point (cash_imp[z_i, 0]) means 
             # the constraint is binding. cash_imp is unconstraiend since agrid[0] == -b
-            # Identify points where we are poorer than the poorest unconstrained agent
 
             # Check convergence
             diff = np.linalg.norm(k_policy_new - k_policy)
-            diff_list[i] = diff
             if diff < (np.linalg.norm(k_policy))*tol:
+                # store class object in self.policy
                 self.policy = OptimalPolicy(cash_imp, self.agrid, self.b)
                 if verbose:
                     print(f"Converged in {i} iterations")
@@ -88,9 +134,8 @@ class Household:
                 return None
             k_policy = k_policy_new * lamb + k_policy * (1 - lamb)
         print("Max iterations reached")
-        print(diff)
         print(f"required value: {(1+np.linalg.norm(k_policy))*tol}")
-        return diff_list, constr
+        raise ValueError("EGM did not converge!")
 
         
     def _simulate_stationary_distribution(
@@ -104,14 +149,12 @@ class Household:
         ):
         """
         Monte Carlo simulation of invariant distribution in Aiyagari model.
+        To be exchanged with histogram iteration. WIP
         """
-            # 1. Setup
         nz = len(self.econ.states)
         
-        # Initialize assets at random grid points
+        # Initialize assets & shocks
         a = np.random.choice(self.agrid, size=H) 
-        
-        # Initialize states (randomly across z)
         z_idx = np.random.choice(nz, size=H)
         
         # Pre-calculate Cumulative Probability for Markov transition
@@ -120,21 +163,16 @@ class Household:
         if verbose:
             print(f"Simulating {H} agents for {T} periods...")
     
-        # 2. Simulation Loop
+        # Simulation Loop
         for t in range(T):
             
             # Vectorized Markov Transition
-            # This compares random draws against the CDF of the current row.
             r_draws = np.random.rand(H)
             
-            # Method: for every agent i, find where r_draws[i] fits in Q_cumsum[z_idx[i]]
-            # Vectorized trick: Summing booleans. 
-            # (Broadcasting is tricky here, let's use a robust approach)
-            
+            # for every agent i, find where r_draws[i] fits in Q_cumsum[z_idx[i]]
             # Look up the specific CDF row for each agent
-            current_cdfs = Q_cumsum[z_idx] # Shape (H, nz)
+            current_cdfs = Q_cumsum[z_idx] # shape (H, nz)
             
-            # Find the first index where CDF > random draw
             # argmax returns the first True index because True > False
             z_next = (current_cdfs > r_draws[:, None]).argmax(axis=1)
             z_idx = z_next
@@ -153,17 +191,56 @@ class Household:
         return a, mean_K
 
 def Emu(c, r, sigma, beta, Q):
+    '''
+    Computes expected marginal utility given a CRRA utility function.
+
+    Parameters
+    ----------
+    c : float
+        Vlaue of consumption.
+    r : float
+        Interest rate.
+    sigma : float
+        Coefficient of relative risk aversion.
+    beta : float
+        Discount factor.
+    Q : Matrix
+        Transition Matrix with sum of rows = 1.
+
+    Returns
+    -------
+    Float
+        Expected marginal utility.
+    '''
     # for negative consumption select small value so that marginal value goes against infinity
     epsilon_clip = 1e-10 
     c_clipped = np.maximum(c, epsilon_clip)
-    
-    # Calculate Marginal Utility for each future state (c'^-sigma)
     C_z = c_clipped**(-sigma)
     C_z_scaled = C_z * (1+r) * beta
     return Q @ C_z_scaled
  
     
 def comp_ressources(agrid, r, w, states):
+    '''
+    Compute cash at hand in the aiyagari model
+
+    Parameters
+    ----------
+    agrid : 1d-array
+        asset grid.
+    r : float
+        Interest rate.
+    w : float
+        Wage.
+    states : 1d-array
+        Array with state values of discretized markov chain.
+
+    Returns
+    -------
+    2d object
+        Cash at hand in shape (nz, na).
+
+    '''
     return (1+r) * agrid[None, :] + w * states[:, None]
 
 
@@ -176,29 +253,35 @@ def construct_grid(b, max_state, na, w_ref=2, zeta=0.15):
     ----------
     b : TYPE
         DESCRIPTION.
-    w : TYPE
-        DESCRIPTION.
-    max_state : TYPE
-        DESCRIPTION.
-    na : TYPE
-        DESCRIPTION.
+    w_ref : TYPE
+        Reference value for the wage. Default is 2
+    max_state : float
+        Highest value of discretized markov shock.
+    na : Int
+        Number of grid points.
     zeta : TYPE, optional
         DESCRIPTION. The default is 0.15.
 
     Returns
     -------
     TYPE
-        DESCRIPTION.
+        1d-array with asset grid.
 
     '''
-    a_max = 15 * w_ref * max_state 
+    a_max = 20 * w_ref * max_state 
     s = np.linspace(0, 1, na)
     zeta = 0.15
     return -b + (a_max + b) * s**(1/zeta)
 
         
 class GE:
+    '''
+    Class to compute general equilibirum in the Aiyagari model
+    '''
     def __init__(self, household):
+        '''
+        Intialize with valeus of economy and households
+        '''
         self.hh = household
         self.econ = household.econ
         
@@ -231,7 +314,7 @@ class GE:
     def solve(self, r_min=None, r_max=None):
         self.iter_count = 0
         self.history = {'r':[], 'K_s':[], 'K_d':[], 'w':[]}
-        eps = 1e-10
+        eps = 1e-5
         if r_min is None:
             r_min = -self.econ.delta + eps
         if r_max is None:
@@ -241,48 +324,51 @@ class GE:
         return r_star
 
 class GE_tax:
+    '''
+    Class to compute general equilibirum in the Aiyagari model extended with fiscal policy.
+    '''
     def __init__(self, household, G):
         self.hh = household
         self.econ = household.econ
         self.G = G
-        
+        self.history = {'r':[], 'K_s':[], 'K_d':[], 'w':[], 'tau':[]}
 
     def capital_demand(self, r):
         alpha = self.econ.alpha
         delta = self.econ.delta
         K_d = (alpha / (r + delta))**(1/(1-alpha))
+        w = (1 - alpha) * (alpha / (r + delta))**(alpha / (1 - alpha))
         self.history['K_d'].append(K_d)
-        return K_d
+        self.history['w'].append(w)
+        return K_d, w
 
-    def capital_supply(self, r, tau):
-        alpha = self.econ.alpha
-        delta = self.econ.delta
-        
+    def capital_supply(self, r, tau, w):
         net_r = (1-tau)*r
-        w = (1 - self.econ.alpha) * (alpha / (r + delta))**(alpha / (1 - alpha))
         net_w = (1-tau) * w
         self.hh._solve_EGM(net_r, net_w)
-        self.a, K_s = self.hh._simulate_stationary_distribution(net_r, net_w, T = 5000, burn_in = 1500)
+        self.a, K_s = self.hh._simulate_stationary_distribution(net_r, net_w, T = 4000, burn_in = 1000)
         # track
-
-        return K_s, w
+        return K_s
 
     def market_clearing(self, r):
         self.iter_count += 1
         print(f"Solving for r: {r:.10f}")
         tau = self.tau_current
-        for _ in range(50):
-            K_s, w = self.capital_supply(r, tau)
+        K_d, w = self.capital_demand(r)
+        for _ in range(15):
+            K_s = self.capital_supply(r, tau, w)
             tau_new = self.implied_tau(r, K_s, w)
-            if abs(tau_new - tau) < 1e-4:
+            if abs(tau_new - tau) < 1e-3:
                 break
-        self.tau_current = 0.8 * tau + 0.2 * tau_new
+        # conservative dampening
+        self.tau_current = 0.7 * tau + 0.3 * tau_new
         self.K_s_current = K_s
         print(f"Solving with actual guess for tau: {self.tau_current}")
-        K_d = self.capital_demand(r)
+
         self.history['r'].append(r)
         self.history['K_s'].append(K_s)
-        self.history['w'].append(w)
+
+        self.history['tau'].append(self.tau_current)
         return K_d - K_s
     
 
@@ -293,7 +379,7 @@ class GE_tax:
     def solve(self, r_min=None, r_max=None, tau0=0.1):
         self.tau_current = tau0
         self.iter_count = 0
-        self.history = {'r':[], 'K_s':[], 'K_d':[], 'w':[]}
+        self.history = {'r':[], 'K_s':[], 'K_d':[], 'w':[], 'tau':[]}
         eps = 1e-10
         if r_min is None:
             r_min = -self.econ.delta + eps
@@ -313,8 +399,8 @@ class GE_tax:
 class OptimalPolicy:
     def __init__(self, cash, a_prime, b_constraint):
         """
-        a_prime: The fixed grid of assets chosen for tomorrow (1D array)
         cash: The endogenous resource grid computed by EGM (nz, na)
+        a_prime: The fixed grid of assets chosen for tomorrow (1D array)
         b_constraint: The borrowing limit (positive number, e.g., 0.0 or 2.0)
                       The constraint is a' >= -b_constraint
         """
@@ -328,8 +414,8 @@ class OptimalPolicy:
         for z_i in range(self.nz):
             # We map Resources (x) -> Assets (y)
             f = interp1d(
-                cash[z_i, :],  # x: Endogenous resources
-                a_prime,                 # y: Chosen assets
+                cash[z_i, :],  # x: endogenous resources
+                a_prime,       # y: chosen assets
                 kind='linear',
                 bounds_error=False,
                 fill_value="extrapolate"
@@ -342,7 +428,7 @@ class OptimalPolicy:
         This is primarily for TESTING, VISUALIZATION, and GRID LOOKUP.
         
         Parameters:
-            xgrid: The (nz, na) Cash-on-Hand matrix you want to query.
+            xgrid: The (nz, na) Cash-on-Hand matrix.
                    
         Returns:
             a_prime_matrix: The resulting (nz, na) matrix of chosen assets (a').
@@ -364,7 +450,7 @@ class OptimalPolicy:
 
     def simulate_policy(self, z_idx, current_cash):
         """
-        Optimized method for Monte Carlo Simulation.
+        Optimized method for SIMULATION.
         Takes 1D vectors of agent states and cash-on-hand.
         
         Parameters:
