@@ -259,3 +259,10 @@ plt.show()
 plt.plot(ge2_tax.history['K_s'], ge2_tax.history['r'], 'o-', label='K_s')
 plt.plot(ge2_tax.history['K_d'], ge2_tax.history['r'], 'x-', label='K_d')
 plt.show()
+
+#%% Gibbs sampler extension
+from scripts.aiyagari import GE_tax_Gibbs
+
+gibbs = GE_tax_Gibbs(household_aiy2, G=0.25)
+#%%
+gibbs.gibbs_solve(n_iter=1000, burn_in=950)

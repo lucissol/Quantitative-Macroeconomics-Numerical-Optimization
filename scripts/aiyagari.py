@@ -592,5 +592,23 @@ class test: # WiP
         u_flat = u_pi.ravel(order='F')
         Q_pi = self._construct_sparse_Q(policy, z_idx_flat)
         print(Q_pi)
-        
+
         return spsolve(identity(self.na*self.nz) - self.beta * Q_pi, u_flat)
+    
+    
+    
+    
+# pseudo code lottery histogram iteration
+
+# Compute grid in the following way
+
+# for states in states
+#   for assets in assets
+#       get optimal from policy
+#           store only indices and probabilites!!!!!!!
+#       find adjacent points
+#       iterate over state index to get the pair of optimal poitns
+#       apply lotterly formular and transtiion dynamics
+
+#use for jx in 1:nx: tj = (j-q)nx + ix and tjp = (jp-1)nx +ix
+# assign probability of state plus lottery over stae iteration to set up values!        
